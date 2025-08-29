@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Anytime Satya — Fireworks</title>
+    <style>
+      :root {
+        --bg1: #010109;
+        --bg2: #000000;
+        --hint: #b9c7ffcc;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: radial-gradient(
+          1200px 800px at 50% 60%,
+          var(--bg1),
+          var(--bg2)
+        );
+        overflow: hidden;
+      }
+      canvas#fw {
+        position: fixed;
+        inset: 0;
+        display: block;
+        touch-action: none; /* smoother pointer bursts on mobile */
+        cursor: crosshair;
+      }
+      .overlay {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        pointer-events: none;
+        text-align: center;
+        padding: 4vmin;
+      }
+      h1 {
+        margin: 0;
+        line-height: 1;
+      }
+      h1 span {
+        display: inline-block;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto,
+          Inter, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji",
+          "Segoe UI Emoji", "Segoe UI Symbol";
+        font-weight: 900;
+        letter-spacing: 0.02em;
+        font-size: clamp(44px, 9vw, 140px);
+        background: linear-gradient(90deg, #ffffff, #e5f3ff, #ffffff);
+        background-size: 200% 100%;
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        filter: drop-shadow(0 0 10px rgba(140, 200, 255, 0.55))
+          drop-shadow(0 0 26px rgba(0, 140, 255, 0.25));
+        animation: pop-in 900ms cubic-bezier(0.2, 0.8, 0.2, 1) 0.1s both,
+          shimmer 3.6s linear infinite;
+        text-shadow: 0 0 2px rgba(255, 255, 255, 0.2),
+          0 0 18px rgba(120, 180, 255, 0.25);
+        user-select: none;
+      }
+      @keyframes shimmer {
+        0% {
+          background-position: 0% 50%;
+        }
+        100% {
+          background-position: 200% 50%;
+        }
+      }
+      @keyframes pop-in {
+        0% {
+          opacity: 0;
+          transform: translateY(10px) scale(0.98);
+          letter-spacing: 0.08em;
+        }
+        60% {
+          opacity: 1;
+          transform: translateY(0) scale(1.04);
+        }
+        100% {
+          transform: scale(1);
+          letter-spacing: 0.02em;
+        }
+      }
+
+      .hint {
+        position: fixed;
+        bottom: 14px;
+        left: 50%;
+        transform: translateX(-50%);
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto,
+          Inter, "Helvetica Neue", Arial;
+        font-size: clamp(12px, 1.8vw, 14px);
+        color: var(--hint);
+        letter-spacing: 0.04em;
+        background: rgba(0, 0, 0, 0.25);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        padding: 8px 10px;
+        border-radius: 999px;
+        backdrop-filter: blur(6px);
+        pointer-events: none;
+        user-select: none;
+        opacity: 0.9;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="fw" aria-hidden="true"></canvas>
+
+    <div class="overlay" aria-hidden="true">
+      <h1><span>Anytime Satya</span></h1>
+    </div>
+    <div class="hint">Click / tap to launch more 🎆</div>
+
+    <script>
+      (() => {
+        const canvas = document.getElementById("fw");
+        const ctx = canvas.getContext("2d", { alpha: false });
+        let dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1)); // cap DPR for perf
+        let width = 0,
+          height = 0,
+          isHidden = false;
+
+        function resize() {
+          width = Math.floor(window.innerWidth);
+          height = Math.floor(window.innerHeight);
+          canvas.style.width = width + "px";
+          canvas.style.height = height + "px";
+          canvas.width = Math.floor(width * dpr);
+          canvas.height = Math.floor(height * dpr);
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          // Fill background once (we use destination-out fading after)
+          ctx.fillStyle = "#000";
+          ctx.fillRect(0, 0, width, height);
+        }
+        window.addEventListener("resize", resize, { passive: true });
+        resize();
+
+        // ---------------- Fireworks Engine ----------------
+        const particles = [];
+        const rockets = [];
+
+        const cfg = {
+          maxParticles: 1600,
+          gravity: 0.04,
+          friction: 0.985,
+          trail: 6,
+          // Spawn rates per frame (go wild)
+          spawnBurstChance: 0.25, // random sky bursts
+          spawnRocketsChance: 0.12, // rising rockets
+        };
+
+        const rand = (min, max) => Math.random() * (max - min) + min;
+        const randi = (min, max) => (Math.random() * (max - min + 1) + min) | 0;
+        const clamp = (n, a, b) => (n < a ? a : n > b ? b : n);
+
+        class Particle {
+          constructor(x, y, hue, speed, ring = false) {
+            this.x = x;
+            this.y = y;
+            const angle = Math.random() * Math.PI * 2;
+            // Ring has tighter speed & angle variance for clean circles
+            const spd = speed ?? (ring ? rand(2.6, 3.4) : rand(2.0, 6.2));
+            this.vx = Math.cos(angle) * spd * (ring ? 1 : rand(0.82, 1.18));
+            this.vy = Math.sin(angle) * spd * (ring ? 1 : rand(0.82, 1.18));
+            this.life = 0;
+            this.ttl = randi(48, 84);
+            this.alpha = 1;
+            this.size = rand(1, 2.8);
+            this.hue = (hue + randi(-20, 20)) % 360;
+            this.history = [];
+            this.trailLen = cfg.trail;
+            this.spark = Math.random() < 0.1; // occasional bright spark
+          }
+          update() {
+            this.history.push({ x: this.x, y: this.y });
+            if (this.history.length > this.trailLen) this.history.shift();
+
+            this.x += this.vx;
+            this.y += this.vy;
+            this.vx *= cfg.friction;
+            this.vy = this.vy * cfg.friction + cfg.gravity;
+
+            this.life++;
+            this.alpha = 1 - this.life / this.ttl;
+            return this.life < this.ttl && this.alpha > 0.02;
+          }
+          draw(ctx) {
+            // Trail line
+            if (this.history.length > 1) {
+              ctx.beginPath();
+              const start = this.history[0];
+              ctx.moveTo(start.x, start.y);
+              for (let i = 1; i < this.history.length; i++) {
+                const p = this.history[i];
+                ctx.lineTo(p.x, p.y);
+              }
+              ctx.lineWidth = this.size;
+              ctx.strokeStyle = `hsla(${this.hue},100%,60%,${clamp(
+                this.alpha,
+                0,
+                1
+              )})`;
+              ctx.stroke();
+            }
+            // Spark tip
+            if (this.spark) {
+              ctx.beginPath();
+              ctx.arc(this.x, this.y, this.size * 0.9, 0, Math.PI * 2);
+              ctx.fillStyle = `hsla(${this.hue},100%,70%,${clamp(
+                this.alpha * 0.85,
+                0,
+                1
+              )})`;
+              ctx.fill();
+            }
+          }
+        }
+
+        class Rocket {
+          constructor(x = rand(width * 0.1, width * 0.9)) {
+            this.x = x;
+            this.y = height + 12;
+            this.vx = rand(-0.9, 0.9);
+            this.vy = rand(-12.5, -15.5);
+            this.hue = randi(0, 359);
+            this.alive = true;
+            this.trail = [];
+            this.trailLen = 12;
+          }
+          update() {
+            this.trail.push({ x: this.x, y: this.y });
+            if (this.trail.length > this.trailLen) this.trail.shift();
+
+            this.x += this.vx;
+            this.y += this.vy;
+            this.vy += 0.16; // gravity for rocket
+
+            // explode at apex or randomly for variety
+            const apex = this.vy >= -1.0;
+            const randomPop = Math.random() < 0.012;
+            if (apex || randomPop) {
+              this.alive = false;
+              explode(this.x, this.y, this.hue);
+            }
+            return this.alive;
+          }
+          draw(ctx) {
+            if (this.trail.length < 2) return;
+            ctx.beginPath();
+            const first = this.trail[0];
+            ctx.moveTo(first.x, first.y);
+            for (let i = 1; i < this.trail.length; i++) {
+              const p = this.trail[i];
+              ctx.lineTo(p.x, p.y);
+            }
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = `hsla(${this.hue},100%,70%,0.9)`;
+            ctx.stroke();
+
+            // bright head
+            const last = this.trail[this.trail.length - 1];
+            ctx.beginPath();
+            ctx.arc(last.x, last.y, 1.8, 0, Math.PI * 2);
+            ctx.fillStyle = `hsla(${this.hue},100%,80%,0.9)`;
+            ctx.fill();
+          }
+        }
+
+        function explode(x, y, baseHue = randi(0, 359)) {
+          // Limit to keep perf in check
+          if (particles.length > cfg.maxParticles * 0.95) return;
+
+          const style = Math.random();
+          const isRing = style < 0.28; // circle ring
+          const isPalm = !isRing && style < 0.42; // few thick spokes
+          const isCrackle = !isRing && !isPalm && style < 0.64; // extra sparks
+          let count = isRing ? randi(140, 190) : randi(80, 140);
+
+          if (isPalm) {
+            // 5–7 spokes
+            const spokes = randi(5, 7);
+            for (let s = 0; s < spokes; s++) {
+              const angle = (Math.PI * 2 * s) / spokes;
+              for (let i = 0; i < 28; i++) {
+                const p = new Particle(x, y, baseHue, rand(2.4, 6.0));
+                p.vx = Math.cos(angle) * rand(2.8, 4.6);
+                p.vy = Math.sin(angle) * rand(2.8, 4.6);
+                particles.push(p);
+              }
+            }
+          } else {
+            for (let i = 0; i < count; i++) {
+              particles.push(
+                new Particle(
+                  x + rand(-1.5, 1.5),
+                  y + rand(-1.5, 1.5),
+                  baseHue,
+                  undefined,
+                  isRing
+                )
+              );
+            }
+          }
+
+          if (isCrackle) {
+            // Secondary quick pop
+            const n = randi(24, 45);
+            for (let i = 0; i < n; i++) {
+              const p = new Particle(x, y, baseHue + 40, rand(1.4, 3.0));
+              p.ttl = randi(28, 44);
+              particles.push(p);
+            }
+          }
+
+          // Hard cap trim if we went over
+          if (particles.length > cfg.maxParticles) {
+            particles.splice(0, particles.length - cfg.maxParticles);
+          }
+        }
+
+        // Pointer bursts
+        let lastPointer = 0;
+        function pointerBurst(ev) {
+          const now = performance.now();
+          if (now - lastPointer < 12) return; // throttle
+          lastPointer = now;
+
+          const rect = canvas.getBoundingClientRect();
+          const x =
+            (ev.clientX ?? ev.touches?.[0]?.clientX ?? width / 2) - rect.left;
+          const y =
+            (ev.clientY ?? ev.touches?.[0]?.clientY ?? height / 2) - rect.top;
+          const hue = randi(0, 359);
+          const bursts = randi(2, 4);
+          for (let i = 0; i < bursts; i++) {
+            explode(x + rand(-8, 8), y + rand(-8, 8), hue + randi(-12, 12));
+          }
+        }
+        window.addEventListener("pointerdown", pointerBurst);
+        window.addEventListener("pointermove", (e) => {
+          if (e.pressure > 0 || e.buttons) pointerBurst(e);
+        });
+
+        // Visibility handling to save cycles
+        document.addEventListener("visibilitychange", () => {
+          isHidden = document.hidden;
+        });
+
+        // Animation loop
+        function tick() {
+          requestAnimationFrame(tick);
+          if (isHidden) return;
+
+          // Fade previous frame for trails
+          ctx.globalCompositeOperation = "destination-out";
+          ctx.fillStyle = "rgba(0,0,0,0.14)"; // alpha controls trail length
+          ctx.fillRect(0, 0, width, height);
+
+          ctx.globalCompositeOperation = "lighter";
+
+          // Spawns (goes pretty wild)
+          if (
+            Math.random() < cfg.spawnBurstChance &&
+            particles.length < cfg.maxParticles * 0.9
+          ) {
+            const x = rand(width * 0.08, width * 0.92);
+            const y = rand(height * 0.08, height * 0.6);
+            const hue = randi(0, 359);
+            const multi = randi(1, 3);
+            for (let i = 0; i < multi; i++)
+              explode(
+                x + rand(-24, 24),
+                y + rand(-24, 24),
+                hue + randi(-18, 18)
+              );
+          }
+          if (Math.random() < cfg.spawnRocketsChance && rockets.length < 12) {
+            rockets.push(new Rocket());
+          }
+
+          // Update & draw
+          for (let i = rockets.length - 1; i >= 0; i--) {
+            if (!rockets[i].update()) rockets.splice(i, 1);
+            else rockets[i].draw(ctx);
+          }
+          for (let i = particles.length - 1; i >= 0; i--) {
+            const p = particles[i];
+            if (!p.update()) particles.splice(i, 1);
+            else p.draw(ctx);
+          }
+        }
+        tick();
+
+        // Optional: keyboard space toggles "ultra" mode
+        let ultra = false;
+        window.addEventListener("keydown", (e) => {
+          if (e.code === "Space") {
+            ultra = !ultra;
+            cfg.spawnBurstChance = ultra ? 0.45 : 0.25;
+            cfg.spawnRocketsChance = ultra ? 0.22 : 0.12;
+            cfg.maxParticles = ultra ? 2200 : 1600;
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>
